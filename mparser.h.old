@@ -1,0 +1,28 @@
+#ifndef MPARSER_H
+#define MPARSER_H
+
+typedef char BOOL;
+
+typedef enum symbol {NONE, MINUS, PLUS, MULT, DIV, POW} symbol_t;
+typedef enum fun {NIL, SIN, COS, TAN, ACOS, ASIN, ATAN, COSH, SINH, TANH, EXP, LOG, SQRT, ABS, RAND, CIEL, FLOOR} fun_t;
+
+struct branch {
+	char raw[20];
+	double val;
+
+	symbol_t sym;
+	fun_t fun[20];
+	
+	struct branch *left;
+	struct branch *right;
+
+	BOOL var;
+};
+
+typedef struct branch branch_t;
+
+branch_t *parse_string(char *frmt);
+double eval(branch_t *start, double var);
+void clean_up(branch_t *start);
+
+#endif

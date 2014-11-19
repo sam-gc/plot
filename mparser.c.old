@@ -1,0 +1,551 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <time.h>
+#include "mparser.h"
+
+#define YES 1
+#define NO 0
+
+#define DEBUG printf("%d\n", __LINE__);
+
+struct node {
+	struct branch *val;
+	struct node *left;
+	struct node *right;
+};
+
+typedef struct node node_t;
+
+BOOL is_symbol(char sym)
+{
+	switch(sym)
+	{
+		case '(':
+		case ')':
+		case '*':
+		case '/':
+		case '+':
+		case '-':
+		case ']':
+		case '$':
+			return YES;
+		default:
+			return NO;
+	}
+}
+
+node_t *create_list(char *frmt)
+{
+	node_t *next = NULL;
+	node_t *start = NULL;
+
+	unsigned int len = strlen(frmt);
+	int i = 0;
+	BOOL negative = NO;
+	while(i < len)
+	{
+		BOOL num = NO;
+		if(frmt[i] <= '9' && frmt[i] >= '0')
+			num = YES;
+
+		char part[20];
+		strcpy(part, "");
+
+		if(num)
+		{
+			while(i < len && (frmt[i] <= '9' && frmt[i] >= '0' || frmt[i] == '.'))
+			{
+				sprintf(part, "%s%c", part, frmt[i]);
+				i++;
+			}
+		}
+		else if(is_symbol(frmt[i]))
+		{
+			sprintf(part, "%c", frmt[i]);
+			i++;
+		}
+		else
+		{
+			while(i < len && (frmt[i] > '9' || frmt[i] < '0') && frmt[i] != ')' && frmt[i] != '(')
+			{
+				i++;
+				if(frmt[i - 1] == '[')
+				{
+					sprintf(part, "%s%c", part, '[');
+					break;
+				}
+				if(frmt[i - 1] != ' ')
+					sprintf(part, "%s%c", part, frmt[i - 1]);
+				else
+					break;
+			}
+		}
+
+		if(strcmp(part, ""))
+		{
+			node_t *n = malloc(sizeof(node_t));
+			n->left = NULL;
+			n->right = NULL;
+
+			branch_t *br = malloc(sizeof(branch_t));
+			strcpy(br->raw, part);
+			br->left = NULL;
+			br->right = NULL;
+			br->var = NO;
+			br->sym = NONE;
+
+			int f;
+			for(f = 0; f < 20; f++)
+				br->fun[f] = NONE;
+			n->val = br;
+
+			if(!next)
+			{
+				next = n;
+				start = next;
+			}
+			else
+			{
+				n->left = next;
+				next->right = n;
+				n->right = NULL;
+				next = n;
+			}
+		}
+	}
+
+	return start;
+}
+
+
+char right_most(char *str)
+{
+	unsigned int len = strlen(str);
+	return str[len - 1];
+}
+
+node_t *handle_negatives(node_t *node)
+{
+	node_t *start = node;
+	for(; node; node = node->right)
+	{
+		if(strcmp(node->val->raw, "-"))
+			continue;
+
+		node_t *left = node->left;
+		if(!left || strcmp(left->val->raw, "*") == 0 || strcmp(left->val->raw, "/") == 0 || strcmp(left->val->raw, "+") == 0 || strcmp(left->val->raw, "-") == 0 || strcmp(left->val->raw, "(") == 0 || right_most(left->val->raw) == '[')
+		{
+			// This should be interpreted as a negative sign.
+			node_t *right = node->right;
+			
+			char old[20];
+			strcpy(old, right->val->raw);
+
+			sprintf(right->val->raw, "%c%s", '-', old);
+
+			free(node->val);
+			free(node);
+
+			if(!left)
+			{
+				right->left = NULL;
+				start = right;
+				continue;
+			}
+
+			left->right = right;
+			right->left = left;
+		}
+	}
+	return start;
+}
+
+node_t *scan_for(node_t *node, char *a, char *b)
+{
+	node_t *start = node;
+	while(node)
+	{
+		char *raw = node->val->raw;
+
+		if(!node->val->left && (!node->val->right && strcmp(a, raw) == 0 || (b && strcmp(b, raw) == 0)))
+		{
+			node_t *left = node->left;
+			node_t *right = node->right;
+			node_t *far_right = right->right;
+			node_t *far_left = left->left;
+			node->val->left = left->val;
+			node->val->right = right->val;
+
+			if(far_left)
+			{
+				far_left->right = node;
+				node->left = far_left;
+			}
+			else
+			{
+				node->left = NULL;
+				start = node;
+			}
+
+			if(far_right)
+			{
+				far_right->left = node;
+				node->right = far_right;
+			}
+			else
+			{
+				node->right = NULL;
+			}
+
+			free(left);
+			free(right);
+		}
+
+		node = node->right;
+	}
+
+	return start;
+}
+
+node_t *handle_parens(node_t *node)
+{
+	node_t *start = node;
+
+	while(node)
+	{
+		if(strcmp(")", node->val->raw) == 0)
+		{
+			node_t *nRight = node->right;
+			node_t *curr = node;
+			node->left->right = NULL;
+			while(strcmp("(", node->val->raw)) // Backup until we find the open paren
+				node = node->left;
+
+			free(curr->val);
+			free(curr);
+
+			node_t *nLeft = node->left;
+			node->right->left = NULL;
+
+			node->right = scan_for(node->right, "^", NULL);
+			node->right = scan_for(node->right, "*", "/");
+			node->right = scan_for(node->right, "+", "-");
+
+			curr = node->right;
+
+			free(node->val);
+			free(node);
+
+			if(nLeft)
+			{
+				nLeft->right = curr;
+				curr->left = nLeft;
+			}
+			else
+			{
+				start = curr;
+			}
+
+			if(nRight)
+			{
+				nRight->left = curr;
+				curr->right = nRight;
+			}
+
+			return handle_parens(start);
+		}
+		node = node->right;
+	}
+
+	return start;
+}
+
+fun_t type_for_str(char *str)
+{
+	if(strcmp(str, "Sin[") == 0)
+		return SIN;
+	if(strcmp(str, "Cos[") == 0)
+		return COS;
+	if(strcmp(str, "Tan[") == 0)
+		return TAN;
+	if(strcmp(str, "ArcCos[") == 0)
+		return ACOS;
+	if(strcmp(str, "ArcSin[") == 0)
+		return ASIN;
+	if(strcmp(str, "ArcTan[") == 0)
+		return ATAN;
+	if(strcmp(str, "Cosh[") == 0)
+		return COSH;
+	if(strcmp(str, "Sinh[") == 0)
+		return SINH;
+	if(strcmp(str, "Tanh[") == 0)
+		return TANH;
+	if(strcmp(str, "Exp[") == 0)
+		return EXP;
+	if(strcmp(str, "Log[") == 0)
+		return LOG;
+	if(strcmp(str, "Sqrt[") == 0)
+		return SQRT;
+	if(strcmp(str, "Abs[") == 0)
+		return ABS;
+	if(strcmp(str, "Rand[") == 0)
+		return RAND;
+	if(strcmp(str, "Ceil[") == 0)
+		return CIEL;
+	if(strcmp(str, "Floor[") == 0)
+		return FLOOR;
+}
+
+void add_function(branch_t *br, fun_t fun)
+{
+	int f;
+	for(f = 0; br->fun[f] && f < 20; f++);
+	br->fun[f] = fun;
+}
+
+node_t *handle_functions(node_t *node)
+{
+	node_t *start = node;
+	while(node)
+	{
+		if(strcmp("]", node->val->raw) == 0)
+		{
+			node_t *nRight = node->right;
+			node_t *curr = node;
+			node->left->right = NULL;
+			while(right_most(node->val->raw) != '[') // Backup until we find the open bracket
+				node = node->left;
+
+			free(curr->val);
+			free(curr);
+
+			node_t *nLeft = node->left;
+			node->right->left = NULL;
+
+			node->right = handle_parens(node->right);
+			node->right = scan_for(node->right, "^", NULL);
+			node->right = scan_for(node->right, "*", "/");
+			node->right = scan_for(node->right, "+", "-");
+
+			curr = node->right;
+			add_function(curr->val, type_for_str(node->val->raw));
+
+			free(node->val);
+			free(node);
+
+			if(nLeft)
+			{
+				nLeft->right = curr;
+				curr->left = nLeft;
+			}
+			else
+			{
+				start = curr;
+			}
+
+			if(nRight)
+			{
+				nRight->left = curr;
+				curr->right = nRight;
+			}
+
+			return handle_functions(start);
+		}
+
+		node = node->right;
+	}
+
+	return start;
+}
+
+void print_list(node_t *start)
+{
+	node_t *next = start;
+	while(next)
+	{
+		printf("%s\n", (*next->val).raw);
+		next = next->right;
+	}
+}
+
+branch_t *build_tree(node_t *start)
+{
+	start = handle_functions(start);
+	start = handle_parens(start);
+
+	start = scan_for(start, "^", NULL);
+	start = scan_for(start, "*", "/");
+	start = scan_for(start, "+", "-");
+
+	branch_t *ret = start->val;
+	free(start);
+
+	return ret;
+}
+
+void clean_up(branch_t *start)
+{
+	if(start->left)
+		clean_up(start->left);
+	if(start->right)
+		clean_up(start->right);
+
+	free(start);
+}
+
+void interpret_tree(branch_t *start)
+{
+	if(start->left)
+		interpret_tree(start->left);
+	if(start->right)
+		interpret_tree(start->right);
+
+	char *raw = start->raw;
+
+	if(strcmp("*", raw) == 0)
+		start->sym = MULT;
+	else if(strcmp("/", raw) == 0)
+		start->sym = DIV;
+	else if(strcmp("+", raw) == 0)
+		start->sym = PLUS;
+	else if(strcmp("-", raw) == 0)
+		start->sym = MINUS;
+	else if(strcmp("^", raw) == 0)
+		start->sym = POW;
+	else if(right_most(raw) == '$')
+		start->var = YES;
+	else
+	{
+		start->sym = NONE;
+		start->val = atof(raw);
+	}
+}
+
+double stack_functions(branch_t *br, double accum)
+{
+	int f;
+	for(f = 0; br->fun[f] && f < 20; f++)
+	{
+		switch(br->fun[f])
+		{
+			case SIN:
+				accum = sin(accum);
+			break;
+			case COS:
+				accum = cos(accum);
+			break;
+			case TAN:
+				accum = tan(accum);
+			break;
+			case ACOS:
+				accum = acos(accum);
+			break;
+			case ASIN:
+				accum = asin(accum);
+			break;
+			case ATAN:
+				accum = atan(accum);
+			break;
+			case COSH:
+				accum = cosh(accum);
+			break;
+			case SINH:
+				accum = sinh(accum);
+			break;
+			case TANH:
+				accum = tanh(accum);
+			break;
+			case EXP:
+				accum = exp(accum);
+			break;
+			case LOG:
+				accum = log(accum);
+			break;
+			case SQRT:
+				accum = sqrt(accum);
+			break;
+			case ABS:
+				accum = fabs(accum);
+			break;
+			case RAND:
+				accum = rand() % (long)accum;
+			break;
+			case CIEL:
+				accum = ceil(accum);
+			break;
+			case FLOOR:
+				accum = floor(accum);
+			break;
+		}
+	}
+
+	return isfinite(accum) ? accum : NAN;
+}
+
+double eval(branch_t *start, double var)
+{
+	double retVal;
+	if(start->sym)
+	{
+		double a, b;
+		a = eval(start->left, var);
+		b = eval(start->right, var);
+
+		switch(start->sym)
+		{
+			case PLUS:
+				retVal = a + b;
+			break;
+			case MINUS:
+				retVal = a - b;
+			break;
+			case MULT:
+				retVal = a * b;
+			break;
+			case DIV:
+				retVal = a / b;
+			break;
+			case POW:
+				retVal = pow(a, b);
+			break;
+		}
+	}
+	else
+	{
+		if(start->var)
+			retVal = start->raw[0] == '-' ? var * -1 : var;
+		else
+			retVal = start->val;
+	}
+
+	if(!isfinite(retVal))
+		return NAN;
+	if(!start->fun[0])
+		return retVal;
+
+	return stack_functions(start, retVal);
+}
+
+void run_timer(branch_t *br, int reps)
+{
+	clock_t startTime = clock();
+
+	int i;
+	for(i = 0; i < reps; i++)
+		eval(br, 0);
+
+	float secs = (float)(clock() - startTime) / CLOCKS_PER_SEC;
+
+	printf("Evaluated %d times. Result is: %lf\nTook: %f", reps, eval(br, 0), secs);
+}
+
+branch_t *parse_string(char *frmt)
+{
+	node_t *node = create_list(frmt);
+	node = handle_negatives(node);
+	branch_t *br = build_tree(node);
+	interpret_tree(br);
+	return br;
+}
